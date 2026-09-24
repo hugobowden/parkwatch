@@ -1,0 +1,8 @@
+.venv/
+.venv
+*.nosync/
+data/
+data
+__pycache__/
+*.pt
+.claude/

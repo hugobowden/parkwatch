@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ParkWatch</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%232563eb'/><text x='16' y='23' font-size='20' font-family='Arial' font-weight='700' fill='white' text-anchor='middle'>P</text></svg>">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">P</span> ParkWatch</div>
+    <nav class="tabs" role="tablist">
+      <button class="tab" data-view="live" role="tab">Live</button>
+      <button class="tab" data-view="insights" role="tab">Insights</button>
+      <button class="tab" data-view="cameras" role="tab">Cameras</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- LIVE -->
+    <section id="view-live" class="view">
+      <div id="live-summary" class="summary"></div>
+      <div id="live-cams" class="cam-grid"></div>
+    </section>
+
+    <!-- INSIGHTS -->
+    <section id="view-insights" class="view" hidden>
+      <div class="toolbar">
+        <label>Camera <select id="ins-camera"></select></label>
+        <label>Period
+          <select id="ins-days">
+            <option value="7">Last 7 days</option>
+            <option value="30" selected>Last 30 days</option>
+            <option value="90">Last 90 days</option>
+          </select>
+        </label>
+      </div>
+      <div id="ins-body"></div>
+    </section>
+
+    <!-- CAMERAS -->
+    <section id="view-cameras" class="view" hidden>
+      <div class="split">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Cameras</h2>
+            <button id="btn-add-cam" class="btn primary">Add camera</button>
+          </div>
+          <ul id="cam-list" class="cam-list"></ul>
+        </div>
+        <div class="panel grow" id="cam-detail">
+          <p class="muted">Pick a camera to edit its settings and draw its parking spaces.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Add / edit camera dialog -->
+  <dialog id="cam-dialog">
+    <form id="cam-form" method="dialog">
+      <h2 id="cam-dialog-title">Add camera</h2>
+      <label>Name <input name="name" required maxlength="80" placeholder="Front car park"></label>
+      <label>Source
+        <input name="source" required placeholder="rtsp://user:pass@192.168.1.20:554/stream1">
+      </label>
+      <details class="hint">
+        <summary>What can I use as a source?</summary>
+        <ul>
+          <li><code>rtsp://…</code> – most IP / CCTV cameras (check your camera's manual for the stream path)</li>
+          <li><code>http://…/video.mjpg</code> – MJPEG streams</li>
+          <li><code>http://…/snapshot.jpg</code> – a still image URL, fetched each check</li>
+          <li><code>0</code> – a webcam plugged into this computer</li>
+          <li><code>/path/to/video.mp4</code> – a recorded video, looped</li>
+          <li><code>demo</code> – a simulated lot, with 3 weeks of sample history</li>
+        </ul>
+      </details>
+      <div class="row">
+        <button type="button" id="btn-test" class="btn">Test connection</button>
+        <span id="test-msg" class="muted"></span>
+      </div>
+      <img id="test-preview" alt="" hidden>
+      <div class="grid2">
+        <label>Detector
+          <select name="detector">
+            <option value="auto">Auto</option>
+            <option value="texture">Texture (built-in)</option>
+            <option value="yolo">Vehicle AI (YOLO)</option>
+          </select>
+        </label>
+        <label>Check every (seconds) <input name="interval_sec" type="number" min="0.5" max="600" step="0.5" value="3"></label>
+      </div>
+      <label>Sensitivity <span id="sens-val" class="muted">0.50</span>
+        <input name="sensitivity" type="range" min="0" max="1" step="0.05" value="0.5">
+      </label>
+      <p class="muted small">Raise sensitivity if parked cars are being missed; lower it if empty spaces show as taken.</p>
+      <div class="row end">
+        <button type="button" class="btn" id="btn-cancel">Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

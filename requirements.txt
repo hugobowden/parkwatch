@@ -1,0 +1,6 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+opencv-python-headless>=4.9
+numpy>=1.26
+# Optional, for the "Vehicle AI (YOLO)" detector on real cameras (large download, AGPL-licensed):
+# ultralytics>=8.2
