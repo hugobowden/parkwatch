@@ -6,3 +6,5 @@ data
 __pycache__/
 *.pt
 .claude/
+*.pdf
+.DS_Store

@@ -12,6 +12,37 @@ from .demo import DemoLot
 log = logging.getLogger("parkwatch.camera")
 
 SNAPSHOT_EXTS = (".jpg", ".jpeg", ".png")
+YOUTUBE_HOSTS = ("youtube.com/", "youtu.be/")
+BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/128.0 Safari/537.36 ParkWatch")
+
+
+def is_youtube(source: str) -> bool:
+    return any(h in source.lower() for h in YOUTUBE_HOSTS)
+
+
+def resolve_youtube(url: str) -> tuple[str, bool]:
+    """Find the direct video stream behind a YouTube link. Returns (stream_url, is_live).
+
+    YouTube stream links expire after a few hours, so this is called again on every reconnect.
+    """
+    try:
+        import yt_dlp
+    except ImportError:
+        raise RuntimeError("yt-dlp isn't installed (pip install yt-dlp)")
+    opts = {"quiet": True, "no_warnings": True, "noplaylist": True,
+            # Video only (no audio needed), H.264 where possible since OpenCV decodes it
+            # reliably, and 720p is plenty for spotting cars while being light to decode.
+            "format": "bestvideo[height<=720][vcodec^=avc1]/bestvideo[height<=720]"
+                      "/best[height<=720][vcodec!=none]/bestvideo/best"}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    if info.get("live_status") == "is_upcoming":
+        raise RuntimeError("this stream hasn't started yet")
+    stream = info.get("url")
+    if not stream:
+        raise RuntimeError("no playable video stream found")
+    return stream, bool(info.get("is_live"))
 
 
 class FrameSource:
@@ -29,6 +60,7 @@ class FrameSource:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._demo: DemoLot | None = None
+        self._paced = False  # sleep between frames (files, recorded YouTube videos)
 
         if self.source == "demo":
             self._demo = DemoLot()
@@ -38,13 +70,20 @@ class FrameSource:
 
     def _is_snapshot(self) -> bool:
         s = self.source.lower()
-        return s.startswith("snapshot:") or (
-            s.startswith(("http://", "https://")) and s.split("?")[0].endswith(SNAPSHOT_EXTS)
-        )
+        return s.startswith("snapshot:") or s.split("?")[0].endswith(SNAPSHOT_EXTS)
 
-    def _open_capture(self) -> cv2.VideoCapture:
+    def _open_capture(self) -> cv2.VideoCapture | None:
         src: str | int = self.source
-        if isinstance(src, str) and src.isdigit():
+        self._paced = not self.source.isdigit() and "://" not in self.source  # video files
+        if is_youtube(self.source):
+            try:
+                src, live = resolve_youtube(self.source)
+            except Exception as e:
+                # "ERROR: [youtube] abc123: This video is unavailable" -> "This video is unavailable"
+                self.error = "YouTube: " + str(e).split(": ", 2)[-1]
+                return None
+            self._paced = not live  # recorded videos play at normal speed and loop
+        elif src.isdigit():
             src = int(src)  # local webcam index
         cap = cv2.VideoCapture(src)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -52,11 +91,12 @@ class FrameSource:
 
     def _stream_loop(self) -> None:
         backoff = 1.0
-        is_file = not self.source.isdigit() and "://" not in self.source
         while not self._stop.is_set():
+            # Re-resolved on every (re)connect, which also renews expired YouTube links.
             cap = self._open_capture()
-            if not cap.isOpened():
-                self.error = "Could not open camera source"
+            is_file = self._paced and not is_youtube(self.source)
+            if cap is None or not cap.isOpened():
+                self.error = self.error if cap is None else "Could not open camera source"
                 log.warning("cannot open %s, retrying in %.0fs", self.source, backoff)
                 self._stop.wait(backoff)
                 backoff = min(backoff * 2, 30)
@@ -72,15 +112,21 @@ class FrameSource:
                     self.error = "Stream dropped, reconnecting"
                     break
                 self.frame, self.frame_ts, self.error = frame, time.time(), None
-                if is_file:
+                if self._paced:
                     time.sleep(1 / fps)
-            cap.release()
+            if cap is not None:
+                cap.release()
 
     def _fetch_snapshot(self) -> None:
         url = self.source.removeprefix("snapshot:")
         try:
-            with urllib.request.urlopen(url, timeout=10) as r:
-                data = np.frombuffer(r.read(), np.uint8)
+            if "://" in url:
+                # Many webcam sites reject requests that don't look like they come from a browser.
+                req = urllib.request.Request(url, headers={"User-Agent": BROWSER_UA})
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    data = np.frombuffer(r.read(), np.uint8)
+            else:  # a local photo, handy for trying out spaces and detection
+                data = np.fromfile(url, np.uint8)
             frame = cv2.imdecode(data, cv2.IMREAD_COLOR)
             if frame is None:
                 raise ValueError("response was not an image")

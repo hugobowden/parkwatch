@@ -94,35 +94,64 @@ def yolo_available() -> bool:
         return False
 
 
-def yolo_scores(frame: np.ndarray, spaces: list[dict], sensitivity: float = 0.5) -> list[float] | None:
+VEHICLE_NAMES = {2: "car", 3: "motorbike", 5: "bus", 7: "truck"}
+
+
+def detect_vehicles(frame: np.ndarray, sensitivity: float = 0.5) -> list[dict] | None:
+    """Every vehicle in the frame as {box: [x1, y1, x2, y2] (0..1), conf, kind}, or None without YOLO."""
     model = _load_yolo()
     if model is None:
         return None
     h, w = frame.shape[:2]
     conf = 0.45 - (sensitivity - 0.5) * 0.4
     result = model.predict(frame, conf=max(conf, 0.05), verbose=False)[0]
-    vehicles = np.zeros((h, w), np.uint8)
-    for box, cls in zip(result.boxes.xyxy.cpu().numpy(), result.boxes.cls.cpu().numpy()):
+    out = []
+    for box, cls, p in zip(result.boxes.xyxy.cpu().numpy(), result.boxes.cls.cpu().numpy(),
+                           result.boxes.conf.cpu().numpy()):
         if int(cls) in VEHICLE_CLASSES:
-            x1, y1, x2, y2 = box.astype(int)
-            # The lower part of a box is where the car meets the ground, which
-            # matters on angled views where a car's roof overlaps the space behind it.
-            y1 = y1 + (y2 - y1) // 3
-            vehicles[max(y1, 0):y2, max(x1, 0):x2] = 255
-    probs = []
-    for (x0, y0, x1, y1), full, _ in _space_masks(spaces, w, h):
-        area = np.count_nonzero(full)
-        covered = np.logical_and(full > 0, vehicles[y0:y1, x0:x1] > 0).sum()
-        coverage = covered / area if area else 0
-        probs.append(float(min(coverage / 0.4, 1.0)))
-    return probs
+            x1, y1, x2, y2 = box
+            out.append({"box": [round(float(x1) / w, 4), round(float(y1) / h, 4),
+                                round(float(x2) / w, 4), round(float(y2) / h, 4)],
+                        "conf": round(float(p), 2), "kind": VEHICLE_NAMES[int(cls)]})
+    return out
 
 
-def score_spaces(frame: np.ndarray, spaces: list[dict], detector: str, sensitivity: float) -> list[float]:
-    if not spaces:
-        return []
+def vehicle_coverage(vehicles: list[dict], spaces: list[dict], w: int, h: int) -> list[float]:
+    """How likely each space is occupied.
+
+    Each vehicle counts towards only one space: the one holding most of its footprint.
+    Vehicle boxes are rectangles, so on angled views a car's box spills into the
+    neighbouring bays; without this one car would mark two or three bays as taken.
+    """
+    masks = _space_masks(spaces, w, h)
+    areas = [max(np.count_nonzero(full), 1) for _, full, _ in masks]
+    coverage = [0.0] * len(spaces)
+    for v in vehicles:
+        x1, y1, x2, y2 = v["box"]
+        # The lower part of the box is where the car meets the ground; the top is
+        # roof, which on angled views overlaps the space behind it.
+        y1 = y1 + (y2 - y1) / 3
+        bx0, by0, bx1, by1 = int(x1 * w), int(y1 * h), int(x2 * w), int(y2 * h)
+        footprint = max((bx1 - bx0) * (by1 - by0), 1)
+        best, best_share, best_inside = -1, 0.0, 0
+        for i, ((sx0, sy0, sx1, sy1), full, _) in enumerate(masks):
+            ix0, iy0, ix1, iy1 = max(bx0, sx0), max(by0, sy0), min(bx1, sx1), min(by1, sy1)
+            if ix0 >= ix1 or iy0 >= iy1:
+                continue
+            inside = int(np.count_nonzero(full[iy0 - sy0:iy1 - sy0, ix0 - sx0:ix1 - sx0]))
+            share = inside / footprint  # how much of this car sits in this space
+            if share > best_share:
+                best, best_share, best_inside = i, share, inside
+        if best >= 0:
+            coverage[best] = max(coverage[best], best_inside / areas[best])
+    return [float(min(c / 0.4, 1.0)) for c in coverage]
+
+
+def analyse(frame: np.ndarray, spaces: list[dict], detector: str, sensitivity: float):
+    """Returns (occupancy probability per space, vehicles found or None if the detector can't box them)."""
     if detector in ("yolo", "auto") and (detector == "yolo" or yolo_available()):
-        probs = yolo_scores(frame, spaces, sensitivity)
-        if probs is not None:
-            return probs
-    return texture_scores(frame, spaces, sensitivity)
+        vehicles = detect_vehicles(frame, sensitivity)
+        if vehicles is not None:
+            h, w = frame.shape[:2]
+            return (vehicle_coverage(vehicles, spaces, w, h) if spaces else []), vehicles
+    return (texture_scores(frame, spaces, sensitivity) if spaces else []), None

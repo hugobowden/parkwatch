@@ -63,6 +63,10 @@ Pi 5 but is slow: set the camera to check every 10 seconds or more.
      brand; search "<your camera model> RTSP URL".
    - `http://…/video.mjpg`: MJPEG streams.
    - `http://…/snapshot.jpg`: a still image URL, fetched on each check.
+   - `https://www.youtube.com/watch?v=…`: a YouTube livestream (e.g. a public parking-lot
+     cam) or video. Great for demos; YouTube's terms don't really allow this, so don't
+     build a product on it.
+   - a photo on this computer, e.g. `/Users/you/Pictures/lot.jpg`, for trying out spaces.
    - `0`: a webcam plugged into this computer.
    - `/path/to/video.mp4`: a recorded video, played on a loop (handy for testing).
 2. **Draw the spaces.** Click **Draw space**, then the 4 corners of a bay. Drag the white

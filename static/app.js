@@ -86,7 +86,7 @@ async function pollStatus() {
   } catch (e) {
     $("#live-summary").innerHTML = `<div class="stat"><div class="label">Server</div><div class="value">Offline</div><div class="sub">${esc(e.message)}</div></div>`;
   } finally {
-    setTimeout(pollStatus, 2000);
+    setTimeout(pollStatus, 1000);
   }
 }
 
@@ -143,7 +143,7 @@ function renderLive() {
           <div class="count"></div></div>
         <div class="bar"><span></span></div>
         <div class="stage"><img alt="" hidden><svg></svg><div class="placeholder">Waiting for the first frame…</div></div>
-        <div class="foot"><span class="muted typical"></span><span class="muted updated"></span></div>
+        <div class="foot"><span class="muted typical"></span><span class="muted vehicles"></span><span class="muted updated"></span></div>
         <div class="chips"></div>`;
       grid.appendChild(el);
       card = { el, lastFrame: 0 };
@@ -172,7 +172,12 @@ function updateLiveCard(card, cam) {
   $(".typical", el).textContent = typ == null ? "" :
     `Usually ${Math.round(typ)}% full now` + (best ? ` · quietest later: ${fmtRange(best.hour)}` : "");
 
-  // Swap the frame only once the new one has loaded, so it never flickers.
+  const moving = (cam.vehicles || []).filter((v) => v.moving).length;
+  $(".vehicles", el).textContent = cam.vehicles == null ? "" :
+    `${cam.vehicles.length} vehicle${cam.vehicles.length === 1 ? "" : "s"} in view` + (moving ? ` · ${moving} moving` : "");
+
+  // Swap the frame only once the new one has loaded, so it never flickers, and draw the
+  // overlay at the same moment so vehicle boxes always line up with the picture.
   const img = $("img", el);
   if (cam.last_update && cam.last_update !== card.lastFrame) {
     card.lastFrame = cam.last_update;
@@ -181,14 +186,28 @@ function updateLiveCard(card, cam) {
       img.src = next.src;
       img.hidden = false;
       $(".placeholder", el).hidden = true;
+      drawOverlay($("svg", el), cam);
     };
     next.src = `/api/cameras/${cam.camera_id}/frame.jpg?t=${cam.last_update}`;
+  } else if (!img.hidden) {
+    drawOverlay($("svg", el), cam);
   }
 
+  $(".chips", el).innerHTML = cam.spaces.map((s) =>
+    `<span class="chip ${s.occupied == null ? "" : s.occupied ? "taken" : "free"}" title="${s.occupied == null ? "" : (s.occupied ? "Taken" : "Free") + " for " + duration(s.since)}">${esc(s.label)}</span>`
+  ).join("");
+}
+
+function drawOverlay(svg, cam) {
   const [w, h] = cam.frame_size?.[0] ? cam.frame_size : [960, 540];
-  const svg = $("svg", el);
   svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
   const fs = Math.max(11, w * 0.018);
+  // Only moving vehicles get a box; parked ones are already shown by their bay colour.
+  const boxes = (cam.vehicles || []).filter((v) => v.moving).map((v) => {
+    const [x1, y1, x2, y2] = v.box;
+    return `<g class="veh"><title>Moving ${esc(v.kind)} (${Math.round(v.conf * 100)}% sure)</title>
+      <rect x="${x1 * w}" y="${y1 * h}" width="${(x2 - x1) * w}" height="${(y2 - y1) * h}"/></g>`;
+  }).join("");
   svg.innerHTML = cam.spaces.map((s) => {
     const pts = s.points.map(([x, y]) => `${x * w},${y * h}`).join(" ");
     const cx = s.points.reduce((a, p) => a + p[0], 0) / s.points.length * w;
@@ -197,11 +216,7 @@ function updateLiveCard(card, cam) {
     return `<g><title>${esc(s.label)}: ${title}</title>
       <polygon class="${spaceClass(s)}" points="${pts}" stroke-width="${Math.max(1.5, w / 400)}"/>
       <text class="space-label" x="${cx}" y="${cy}" font-size="${fs}">${esc(s.label)}</text></g>`;
-  }).join("");
-
-  $(".chips", el).innerHTML = cam.spaces.map((s) =>
-    `<span class="chip ${s.occupied == null ? "" : s.occupied ? "taken" : "free"}" title="${s.occupied == null ? "" : (s.occupied ? "Taken" : "Free") + " for " + duration(s.since)}">${esc(s.label)}</span>`
-  ).join("");
+  }).join("") + boxes;
 }
 
 // ---------------------------------------------------------------- INSIGHTS

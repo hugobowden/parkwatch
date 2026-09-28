@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import analytics, db, demo
-from .camera import FrameSource
+from .camera import FrameSource, is_youtube
 from .detector import yolo_available
 from .monitor import Monitor
 
@@ -76,7 +76,13 @@ def _camera_or_404(camera_id: int) -> dict:
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html")
+    # Tag script/style links with their modification time so browsers fetch fresh copies
+    # after an update instead of running stale cached code.
+    html = (STATIC / "index.html").read_text()
+    for name in ("app.js", "style.css"):
+        version = int((STATIC / name).stat().st_mtime)
+        html = html.replace(f"/static/{name}", f"/static/{name}?v={version}")
+    return Response(html, media_type="text/html", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/info")
@@ -167,16 +173,21 @@ def get_insights(camera_id: int, days: int = 30):
 def test_source(body: SourceTest):
     """Try to grab one frame from a source before saving it as a camera."""
     src = FrameSource(body.source)
+    timeout = 25 if is_youtube(body.source) else 10  # finding a YouTube stream takes a few seconds
     try:
-        deadline = time.time() + 10
+        deadline = time.time() + timeout
         frame = None
         while time.time() < deadline:
             frame = src.latest()
-            if frame is not None or (src.error and "://" not in body.source and not body.source.isdigit()):
+            if frame is not None:
+                break
+            # Local files and YouTube errors won't fix themselves by waiting; network cameras might.
+            if src.error and (src.error.startswith("YouTube") or
+                              ("://" not in body.source and not body.source.isdigit())):
                 break
             time.sleep(0.25)
         if frame is None:
-            raise HTTPException(400, src.error or "No frames received within 10 seconds")
+            raise HTTPException(400, src.error or f"No frames received within {timeout} seconds")
         ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         return Response(buf.tobytes(), media_type="image/jpeg")
     finally:
